@@ -1,0 +1,30 @@
+  - name: check backup directory
+    stat:
+        path: /home/isucon/.backup
+    register: backup
+    become: yes
+    become_user: isucon
+
+  - name: create backup directory
+    file:
+        path: /home/isucon/.backup
+        state: directory
+        mode: 0700
+    become: yes
+    become_user: isucon
+    when: not backup.stat.exists
+
+  - name: copy everything
+    shell: |
+        cp -pr ~isucon/* ~isucon/.backup/
+    become: yes
+    become_user: isucon
+    when: not backup.stat.exists
+
+  - name: create backup directory
+    file:
+        path: /home/isucon/.backup
+        state: directory
+        mode: 0300
+    become: yes
+    become_user: isucon

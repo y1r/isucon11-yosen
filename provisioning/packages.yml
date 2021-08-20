@@ -1,0 +1,11 @@
+  - name: install packages
+    yum:
+      name:
+        - git
+        - vim
+        - wget
+        - tmux
+        - htop
+        - vnstat
+        - bash-completion
+        - redis-server

@@ -1,0 +1,16 @@
+    - name: install package to configure selinux
+      ignore_errors: yes
+      yum:
+        name:
+            - libselinux-python
+
+    - name: install package to configure selinux
+      ignore_errors: yes
+      yum:
+        name:
+            - python-selinux
+            - selinux-policy-ubuntu
+
+    - name: Goodbye SELinux
+      ignore_errors: yes
+      selinux: state=disabled

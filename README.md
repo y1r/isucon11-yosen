@@ -1,0 +1,5 @@
+- update inventory
+- generate key
+  - `ssh-keygen -t rsa $(PATH_TO_GITHUB_DEPLOY_KEY)`
+- upload deploy key to GitHub
+- ssh -i provisioning/github -o IdentitiesOnly=yes git@github.com

@@ -1,0 +1,103 @@
+- hosts: all
+  become: yes
+
+  tasks:
+    - name: passwordless su
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        regexp: '^%wheel\s'
+        line: '%wheel ALL=(ALL) NOPASSWD: ALL'
+
+    - name: passwordless su
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        line: '%adm ALL=(ALL) NOPASSWD: ALL'
+
+    - name: パスワード認証の無効化
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^PasswordAuthentication"
+        insertafter: "^#PasswordAuthentication"
+        line: "PasswordAuthentication no"
+
+    - name: チャレンジ・レスポンス認証の無効化
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^ChallengeResponseAuthentication"
+        insertafter: "^#ChallengeResponseAuthentication"
+        line: "ChallengeResponseAuthentication no"
+
+    - name: PATH go
+      lineinfile:
+        path: /home/isucon/.bashrc
+        state: present
+        line: 'export PATH=~/local/go/bin:$PATH'
+
+    - name: PATH go
+      lineinfile:
+        path: /home/isucon/.bashrc
+        state: present
+        line: 'export PATH=~/go/bin:$PATH'
+
+    - include:
+        packages.yml
+
+    - include:
+        selinux.yml
+
+        #- include:
+        #backup.yml
+
+    - include:
+        github.yml
+
+    - name: download kataribe
+      get_url:
+        url: https://github.com/matsuu/kataribe/releases/download/v0.4.2/kataribe-v0.4.2_linux_amd64.zip
+        dest: "/tmp/kataribe.zip"
+
+    - name: extract kataribe
+      unarchive:
+        src: "/tmp/kataribe.zip"
+        dest: "/usr/bin"
+        remote_src: True
+
+    - name: create kataribe config
+      shell: "kataribe -generate"
+      args:
+        chdir: "/home/isucon"
+      become: yes
+      become_user: isucon
+
+    - name: download notify_slack
+      get_url:
+        url: https://github.com/catatsuy/notify_slack/releases/download/v0.4.11/notify_slack-linux-amd64.tar.gz
+        dest: "/tmp/notify_slack.tar.gz"
+
+    - name: extract notify_slack
+      unarchive:
+        src: "/tmp/notify_slack.tar.gz"
+        dest: "/usr/bin"
+        remote_src: True
+
+    - name: place notify_slack.toml
+      copy:
+        src: notify_slack.toml
+        dest: /home/isucon/.notify_slack.toml
+
+    - name: place slowlog_prepare.sh
+      copy:
+        src: slowlog_prepare.sh
+        dest: /home/isucon/slowlog_prepare.sh
+
+    - name: place slowlog_print.sh
+      copy:
+        src: slowlog_print.sh
+        dest: /home/isucon/slowlog_print.sh
+
+    - name: place deploy.sh
+      copy:
+        src: deploy.sh
+        dest: /home/isucon/deploy.sh

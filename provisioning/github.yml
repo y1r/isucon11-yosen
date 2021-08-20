@@ -1,0 +1,48 @@
+  - name: prepare .ssh directory
+    file:
+        path: /home/isucon/.ssh
+        state: directory
+        mode: 0700
+    become: yes
+    become_user: isucon
+
+  - name: prepare ssh config
+    blockinfile:
+        dest: /home/isucon/.ssh/config
+        mode: 0700
+        create: yes
+        block: |
+            Host github.com
+            HostName      github.com
+            User          git
+            IdentityFile  ~/.ssh/github
+    become: yes
+    become_user: isucon
+
+  - name: upload key
+    copy:
+        src=github
+        dest=/home/isucon/.ssh/github
+        mode=0700
+    become: yes
+    become_user: isucon
+
+  - name: git config
+    blockinfile:
+        dest: /home/isucon/.gitconfig
+        create: yes
+        block: |
+            [user]
+              email = y1r.ueno@gmail.com
+            [alias]
+              s = status -sb
+              c = commit
+              a = add
+              aa = add -A
+              d = diff
+              l = log --graph --date=short --format='%C(yellow)%h%C(reset) %C(magenta)[%ad]%C(reset)%C(auto)%d%C(reset) %s %C(cyan)@%an%C(reset)'
+              ll = log --graph --decorate=full --all --abbrev-commit --stat-count=5
+              b = branch
+              co = checkout
+    become: yes
+    become_user: isucon
