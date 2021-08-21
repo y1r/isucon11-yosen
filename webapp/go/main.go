@@ -218,8 +218,8 @@ func initCaches() {
 }
 
 func main() {
-
 	initCaches()
+	scheduler.Every(1).Seconds().Run(execTrendJob)
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
@@ -272,8 +272,6 @@ func main() {
 
 	serverPort := fmt.Sprintf(":%v", getEnv("SERVER_APP_PORT", "3000"))
 	e.Logger.Fatal(e.Start(serverPort))
-
-	scheduler.Every(1).Seconds().Run(execTrendJob)
 }
 
 func getSession(r *http.Request) (*sessions.Session, error) {
