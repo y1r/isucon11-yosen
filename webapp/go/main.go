@@ -47,6 +47,7 @@ const (
 	bulkInsertTimeout           = 2   // secs
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
+	trendCacheDuration          = 1 // secs
 )
 
 var (
@@ -60,6 +61,7 @@ var (
 	existUsers                    map[string]struct{}
 	existUsersMutex               sync.RWMutex
 	isuIconCache                  sync.Map
+	trendCache                    sync.Map
 )
 
 type Config struct {
@@ -225,12 +227,13 @@ func initCaches() {
 	existUsers = map[string]struct{}{}
 	postIsuConditionRequestBuffer = make(chan PostIsuConditionChannelData, bulkInsertChannelBufferSize)
 	isuIconCache = sync.Map{}
+	trendCache = sync.Map{}
 }
 
 func main() {
-
 	initCaches()
 	go setInsertIsuConditionJob()
+	scheduler.Every(trendCacheDuration).Seconds().Run(execTrendJob)
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
@@ -1170,6 +1173,17 @@ func calculateConditionLevel(condition string) (string, error) {
 // GET /api/trend
 // ISUの性格毎の最新のコンディション情報
 func getTrend(c echo.Context) error {
+	res, ok := trendCache.Load("trend")
+
+	if ok {
+		return c.JSON(http.StatusOK, res)
+	} else {
+		c.Logger().Errorf("cache not found")
+		return c.NoContent(http.StatusInternalServerError)
+	}
+}
+
+func execTrendJob() {
 
 	stmt :=
 		"SELECT i.id, i.character, c2.`condition`, c2.timestamp " +
@@ -1192,8 +1206,9 @@ func getTrend(c echo.Context) error {
 	tmpConditions := []TmpCondition{}
 	err := db.Select(&tmpConditions, stmt)
 	if err != nil {
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+		// c.Logger().Errorf("db error: %v", err)
+		// return c.NoContent(http.StatusInternalServerError)
+		return
 	}
 
 	characterToConditions := map[string]([]TmpCondition){}
@@ -1219,8 +1234,9 @@ func getTrend(c echo.Context) error {
 			if x.Condition != nil {
 				conditionLevel, err := calculateConditionLevel(*x.Condition)
 				if err != nil {
-					c.Logger().Error(err)
-					return c.NoContent(http.StatusInternalServerError)
+					// c.Logger().Error(err)
+					// return c.NoContent(http.StatusInternalServerError)
+					return
 				}
 				trendCondition := TrendCondition{
 					ID:        x.IsuID,
@@ -1248,7 +1264,7 @@ func getTrend(c echo.Context) error {
 
 	}
 
-	return c.JSON(http.StatusOK, res)
+	trendCache.Store("trend", res)
 }
 
 var postIsuConditionRequestBuffer chan PostIsuConditionChannelData
