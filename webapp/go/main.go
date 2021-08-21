@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/carlescere/scheduler"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -167,6 +168,11 @@ type PostIsuConditionRequest struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+type PostIsuConditionChannelData struct {
+	JiaIsuUUID string
+	request    PostIsuConditionRequest
+}
+
 type JIAServiceRequest struct {
 	TargetBaseURL string `json:"target_base_url"`
 	IsuUUID       string `json:"isu_uuid"`
@@ -210,11 +216,13 @@ func init() {
 
 func initCaches() {
 	existUsers = map[string]struct{}{}
+	postIsuConditionRequestBuffer = make(chan PostIsuConditionChannelData, 100000)
 }
 
 func main() {
 
 	initCaches()
+	go setInsertIsuConditionJob()
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
@@ -1209,6 +1217,8 @@ func getTrend(c echo.Context) error {
 	return c.JSON(http.StatusOK, res)
 }
 
+var postIsuConditionRequestBuffer chan PostIsuConditionChannelData
+
 // POST /api/condition/:jia_isu_uuid
 // ISUからのコンディションを受け取る
 func postIsuCondition(c echo.Context) error {
@@ -1249,38 +1259,68 @@ func postIsuCondition(c echo.Context) error {
 		return c.String(http.StatusNotFound, "not found: isu")
 	}
 
-	valueStrings := []string{}
-	valueArgs := [](interface{}){}
-
 	for _, cond := range req {
-		timestamp := time.Unix(cond.Timestamp, 0)
-
-		if !isValidConditionFormat(cond.Condition) {
-			return c.String(http.StatusBadRequest, "bad request body")
+		postIsuConditionRequestBuffer <- PostIsuConditionChannelData{
+			JiaIsuUUID: jiaIsuUUID,
+			request:    cond,
 		}
-
-		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
-		valueArgs = append(valueArgs, jiaIsuUUID)
-		valueArgs = append(valueArgs, timestamp)
-		valueArgs = append(valueArgs, cond.IsSitting)
-		valueArgs = append(valueArgs, cond.Condition)
-		valueArgs = append(valueArgs, cond.Message)
-	}
-
-	query := fmt.Sprintf("INSERT INTO `isu_condition` (`jia_isu_uuid`, `timestamp`, `is_sitting`, `condition`, `message`) VALUES %s", strings.Join(valueStrings, ","))
-	_, err = tx.Exec(query, valueArgs...)
-	if err != nil {
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
 	}
 
 	return c.NoContent(http.StatusAccepted)
+}
+
+func setInsertIsuConditionJob() {
+	batchSize := 1024 * 5
+	conds := []PostIsuConditionChannelData{}
+
+	timeoutChan := make(chan struct{}, 1)
+	scheduler.Every(2).Seconds().NotImmediately().Run(func() {
+		timeoutChan <- struct{}{}
+	})
+
+	bulkInsert := func() {
+		valueStrings := []string{}
+		valueArgs := [](interface{}){}
+
+		for _, cond := range conds {
+			timestamp := time.Unix(cond.request.Timestamp, 0)
+
+			if !isValidConditionFormat(cond.request.Condition) {
+				// return c.String(http.StatusBadRequest, "bad request body")
+			} else {
+				valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
+				valueArgs = append(valueArgs, cond.JiaIsuUUID)
+				valueArgs = append(valueArgs, timestamp)
+				valueArgs = append(valueArgs, cond.request.IsSitting)
+				valueArgs = append(valueArgs, cond.request.Condition)
+				valueArgs = append(valueArgs, cond.request.Message)
+			}
+
+		}
+
+		query := fmt.Sprintf("INSERT INTO `isu_condition` (`jia_isu_uuid`, `timestamp`, `is_sitting`, `condition`, `message`) VALUES %s", strings.Join(valueStrings, ","))
+		_, err := db.Exec(query, valueArgs...)
+		if err != nil {
+			// c.Logger().Errorf("db error: %v", err)
+			// return c.NoContent(http.StatusInternalServerError)
+			return
+		}
+	}
+
+	for {
+		timeout := false
+		select {
+		case cond := <-postIsuConditionRequestBuffer:
+			conds = append(conds, cond)
+		case <-timeoutChan:
+			timeout = true
+		}
+
+		if len(conds) > batchSize || (timeout && len(conds) > 0) {
+			bulkInsert()
+			conds = []PostIsuConditionChannelData{}
+		}
+	}
 }
 
 // ISUのコンディションの文字列がcsv形式になっているか検証
