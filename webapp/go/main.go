@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -49,6 +50,8 @@ var (
 	jiaJWTSigningKey *ecdsa.PublicKey
 
 	postIsuConditionTargetBaseURL string // JIAへのactivate時に登録する，ISUがconditionを送る先のURL
+	existUsers                    map[string]struct{}
+	existUsersMutex               sync.RWMutex
 )
 
 type Config struct {
@@ -205,7 +208,14 @@ func init() {
 	}
 }
 
+func initCaches() {
+	existUsers = map[string]struct{}{}
+}
+
 func main() {
+
+	initCaches()
+
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
 	e := echo.New()
@@ -277,8 +287,16 @@ func getUserIDFromSession(c echo.Context) (string, int, error) {
 	}
 
 	jiaUserID := _jiaUserID.(string)
-	var count int
 
+	existUsersMutex.RLock()
+	_, ok = existUsers[jiaUserID]
+	existUsersMutex.RUnlock()
+
+	if ok {
+		return jiaUserID, 0, nil
+	}
+
+	var count int
 	err = db.Get(&count, "SELECT COUNT(*) FROM `user` WHERE `jia_user_id` = ?",
 		jiaUserID)
 	if err != nil {
@@ -288,6 +306,10 @@ func getUserIDFromSession(c echo.Context) (string, int, error) {
 	if count == 0 {
 		return "", http.StatusUnauthorized, fmt.Errorf("not found: user")
 	}
+
+	existUsersMutex.Lock()
+	existUsers[jiaUserID] = struct{}{}
+	existUsersMutex.Unlock()
 
 	return jiaUserID, 0, nil
 }
@@ -331,6 +353,8 @@ func postInitialize(c echo.Context) error {
 		c.Logger().Errorf("db error : %v", err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
+
+	initCaches()
 
 	return c.JSON(http.StatusOK, InitializeResponse{
 		Language: "go",
