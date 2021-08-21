@@ -207,6 +207,8 @@ func init() {
 }
 
 func main() {
+	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
+
 	e := echo.New()
 	e.Debug = true
 	e.Logger.SetLevel(log.DEBUG)
