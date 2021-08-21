@@ -47,6 +47,7 @@ const (
 	bulkInsertTimeout           = 2   // secs
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
+	trendCacheDuration          = 1 // secs
 )
 
 var (
@@ -232,7 +233,7 @@ func initCaches() {
 func main() {
 	initCaches()
 	go setInsertIsuConditionJob()
-	scheduler.Every(1).Seconds().Run(execTrendJob)
+	scheduler.Every(trendCacheDuration).Seconds().Run(execTrendJob)
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
