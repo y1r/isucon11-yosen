@@ -41,6 +41,12 @@ const (
 	scoreConditionLevelInfo     = 3
 	scoreConditionLevelWarning  = 2
 	scoreConditionLevelCritical = 1
+
+	//
+	dropProbability             = 0.9 // TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
+	bulkInsertTimeout           = 2   // secs
+	bulkInsertBatchSize         = 1024 * 5
+	bulkInsertChannelBufferSize = 100000
 )
 
 var (
@@ -51,11 +57,10 @@ var (
 	jiaJWTSigningKey *ecdsa.PublicKey
 
 	postIsuConditionTargetBaseURL string // JIAへのactivate時に登録する，ISUがconditionを送る先のURL
-
-	existUsers      map[string]struct{}
-	existUsersMutex sync.RWMutex
-
-	trendCache sync.Map
+	existUsers                    map[string]struct{}
+	existUsersMutex               sync.RWMutex
+	isuIconCache                  sync.Map
+	trendCache                    sync.Map
 )
 
 type Config struct {
@@ -171,6 +176,11 @@ type PostIsuConditionRequest struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+type PostIsuConditionChannelData struct {
+	JiaIsuUUID string
+	request    PostIsuConditionRequest
+}
+
 type JIAServiceRequest struct {
 	TargetBaseURL string `json:"target_base_url"`
 	IsuUUID       string `json:"isu_uuid"`
@@ -195,7 +205,7 @@ func NewMySQLConnectionEnv() *MySQLConnectionEnv {
 }
 
 func (mc *MySQLConnectionEnv) ConnectDB() (*sqlx.DB, error) {
-	dsn := fmt.Sprintf("%v:%v@tcp(%v:%v)/%v?parseTime=true&loc=Asia%%2FTokyo", mc.User, mc.Password, mc.Host, mc.Port, mc.DBName)
+	dsn := fmt.Sprintf("%v:%v@tcp(%v:%v)/%v?parseTime=true&loc=Asia%%2FTokyo&interpolateParams=true", mc.User, mc.Password, mc.Host, mc.Port, mc.DBName)
 	return sqlx.Open("mysql", dsn)
 }
 
@@ -214,11 +224,14 @@ func init() {
 
 func initCaches() {
 	existUsers = map[string]struct{}{}
+	postIsuConditionRequestBuffer = make(chan PostIsuConditionChannelData, bulkInsertChannelBufferSize)
+	isuIconCache = sync.Map{}
 	trendCache = sync.Map{}
 }
 
 func main() {
 	initCaches()
+	go setInsertIsuConditionJob()
 	scheduler.Every(1).Seconds().Run(execTrendJob)
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
@@ -226,9 +239,9 @@ func main() {
 	e := echo.New()
 	//e.Debug = true
 	//e.Logger.SetLevel(log.DEBUG)
-	e.Logger.SetLevel(log.WARN)
+	e.Logger.SetLevel(log.OFF)
 
-	e.Use(middleware.Logger())
+	//e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
 	e.POST("/initialize", postInitialize)
@@ -708,6 +721,9 @@ func postIsu(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
+	key := jiaUserID + "." + jiaIsuUUID
+	isuIconCache.Store(key, image)
+
 	return c.JSON(http.StatusCreated, isu)
 }
 
@@ -756,16 +772,25 @@ func getIsuIcon(c echo.Context) error {
 
 	jiaIsuUUID := c.Param("jia_isu_uuid")
 
-	var image []byte
-	err = db.Get(&image, "SELECT `image` FROM `isu` WHERE `jia_user_id` = ? AND `jia_isu_uuid` = ?",
-		jiaUserID, jiaIsuUUID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.String(http.StatusNotFound, "not found: isu")
-		}
+	key := jiaUserID + "." + jiaIsuUUID
 
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	tmp, ok := isuIconCache.Load(key)
+
+	var image []byte
+	if ok {
+		image = tmp.([]byte)
+	} else {
+		err = db.Get(&image, "SELECT `image` FROM `isu` WHERE `jia_user_id` = ? AND `jia_isu_uuid` = ?",
+			jiaUserID, jiaIsuUUID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.String(http.StatusNotFound, "not found: isu")
+			}
+
+			c.Logger().Errorf("db error: %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		isuIconCache.Store(key, image)
 	}
 
 	return c.Blob(http.StatusOK, "", image)
@@ -1063,20 +1088,33 @@ func getIsuConditionsFromDB(db *sqlx.DB, jiaIsuUUID string, endTime time.Time, c
 	conditions := []IsuCondition{}
 	var err error
 
+	part := "(FALSE "
+	for s := range conditionLevel {
+		switch s {
+		case conditionLevelInfo:
+			part += " OR `condition` = 'is_dirty=false,is_overweight=false,is_broken=false'"
+		case conditionLevelWarning:
+			part += " OR (`condition` != 'is_dirty=false,is_overweight=false,is_broken=false' AND `condition` != 'is_dirty=true,is_overweight=true,is_broken=true')"
+		case conditionLevelCritical:
+			part += " OR `condition` = 'is_dirty=true,is_overweight=true,is_broken=true'"
+		}
+	}
+	part += ")"
+
 	if startTime.IsZero() {
 		err = db.Select(&conditions,
 			"SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ?"+
-				"	AND `timestamp` < ?"+
-				"	ORDER BY `timestamp` DESC",
-			jiaIsuUUID, endTime,
+				"	AND `timestamp` < ? AND "+part+
+				"	ORDER BY `timestamp` DESC LIMIT ?",
+			jiaIsuUUID, endTime, limit,
 		)
 	} else {
 		err = db.Select(&conditions,
 			"SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ?"+
 				"	AND `timestamp` < ?"+
-				"	AND ? <= `timestamp`"+
-				"	ORDER BY `timestamp` DESC",
-			jiaIsuUUID, endTime, startTime,
+				"	AND ? <= `timestamp` AND "+part+
+				"	ORDER BY `timestamp` DESC LIMIT ?",
+			jiaIsuUUID, endTime, startTime, limit,
 		)
 	}
 	if err != nil {
@@ -1104,9 +1142,9 @@ func getIsuConditionsFromDB(db *sqlx.DB, jiaIsuUUID string, endTime time.Time, c
 		}
 	}
 
-	if len(conditionsResponse) > limit {
-		conditionsResponse = conditionsResponse[:limit]
-	}
+	// if len(conditionsResponse) > limit {
+	// 	conditionsResponse = conditionsResponse[:limit]
+	// }
 
 	return conditionsResponse, nil
 }
@@ -1227,16 +1265,11 @@ func execTrendJob() {
 	trendCache.Store("trend", res)
 }
 
+var postIsuConditionRequestBuffer chan PostIsuConditionChannelData
+
 // POST /api/condition/:jia_isu_uuid
 // ISUからのコンディションを受け取る
 func postIsuCondition(c echo.Context) error {
-	// TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
-	dropProbability := 0.9
-	if rand.Float64() <= dropProbability {
-		c.Logger().Warnf("drop post isu condition request")
-		return c.NoContent(http.StatusAccepted)
-	}
-
 	jiaIsuUUID := c.Param("jia_isu_uuid")
 	if jiaIsuUUID == "" {
 		return c.String(http.StatusBadRequest, "missing: jia_isu_uuid")
@@ -1267,38 +1300,73 @@ func postIsuCondition(c echo.Context) error {
 		return c.String(http.StatusNotFound, "not found: isu")
 	}
 
-	valueStrings := []string{}
-	valueArgs := [](interface{}){}
-
 	for _, cond := range req {
-		timestamp := time.Unix(cond.Timestamp, 0)
-
-		if !isValidConditionFormat(cond.Condition) {
-			return c.String(http.StatusBadRequest, "bad request body")
+		postIsuConditionRequestBuffer <- PostIsuConditionChannelData{
+			JiaIsuUUID: jiaIsuUUID,
+			request:    cond,
 		}
-
-		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
-		valueArgs = append(valueArgs, jiaIsuUUID)
-		valueArgs = append(valueArgs, timestamp)
-		valueArgs = append(valueArgs, cond.IsSitting)
-		valueArgs = append(valueArgs, cond.Condition)
-		valueArgs = append(valueArgs, cond.Message)
-	}
-
-	query := fmt.Sprintf("INSERT INTO `isu_condition` (`jia_isu_uuid`, `timestamp`, `is_sitting`, `condition`, `message`) VALUES %s", strings.Join(valueStrings, ","))
-	_, err = tx.Exec(query, valueArgs...)
-	if err != nil {
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
 	}
 
 	return c.NoContent(http.StatusAccepted)
+}
+
+func setInsertIsuConditionJob() {
+	batchSize := bulkInsertBatchSize
+	conds := []PostIsuConditionChannelData{}
+
+	timeoutChan := make(chan struct{}, 1)
+	scheduler.Every(bulkInsertTimeout).Seconds().NotImmediately().Run(func() {
+		timeoutChan <- struct{}{}
+	})
+
+	bulkInsert := func() {
+		valueStrings := []string{}
+		valueArgs := [](interface{}){}
+
+		for _, cond := range conds {
+			timestamp := time.Unix(cond.request.Timestamp, 0)
+
+			if !isValidConditionFormat(cond.request.Condition) {
+				// return c.String(http.StatusBadRequest, "bad request body")
+			} else {
+				valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
+				valueArgs = append(valueArgs, cond.JiaIsuUUID)
+				valueArgs = append(valueArgs, timestamp)
+				valueArgs = append(valueArgs, cond.request.IsSitting)
+				valueArgs = append(valueArgs, cond.request.Condition)
+				valueArgs = append(valueArgs, cond.request.Message)
+			}
+
+		}
+
+		query := fmt.Sprintf("INSERT INTO `isu_condition` (`jia_isu_uuid`, `timestamp`, `is_sitting`, `condition`, `message`) VALUES %s", strings.Join(valueStrings, ","))
+		_, err := db.Exec(query, valueArgs...)
+		if err != nil {
+			// c.Logger().Errorf("db error: %v", err)
+			// return c.NoContent(http.StatusInternalServerError)
+			return
+		}
+	}
+
+	for {
+		timeout := false
+		select {
+		case cond := <-postIsuConditionRequestBuffer:
+
+			if rand.Float64() <= dropProbability {
+			} else {
+				conds = append(conds, cond)
+			}
+
+		case <-timeoutChan:
+			timeout = true
+		}
+
+		if len(conds) > batchSize || (timeout && len(conds) > 0) {
+			bulkInsert()
+			conds = []PostIsuConditionChannelData{}
+		}
+	}
 }
 
 // ISUのコンディションの文字列がcsv形式になっているか検証
