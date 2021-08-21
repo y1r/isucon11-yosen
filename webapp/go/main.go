@@ -233,7 +233,7 @@ func main() {
 	//e.Logger.SetLevel(log.DEBUG)
 	e.Logger.SetLevel(log.OFF)
 
-	e.Use(middleware.Logger())
+	//e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
 	e.POST("/initialize", postInitialize)
