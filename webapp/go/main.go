@@ -41,6 +41,12 @@ const (
 	scoreConditionLevelInfo     = 3
 	scoreConditionLevelWarning  = 2
 	scoreConditionLevelCritical = 1
+
+	//
+	dropProbability             = 0.9 // TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
+	bulkInsertTimeout           = 2   // secs
+	bulkInsertBatchSize         = 1024 * 5
+	bulkInsertChannelBufferSize = 100000
 )
 
 var (
@@ -217,7 +223,7 @@ func init() {
 
 func initCaches() {
 	existUsers = map[string]struct{}{}
-	postIsuConditionRequestBuffer = make(chan PostIsuConditionChannelData, 100000)
+	postIsuConditionRequestBuffer = make(chan PostIsuConditionChannelData, bulkInsertChannelBufferSize)
 	isuIconCache = sync.Map{}
 }
 
@@ -1290,11 +1296,11 @@ func postIsuCondition(c echo.Context) error {
 }
 
 func setInsertIsuConditionJob() {
-	batchSize := 1024 * 5
+	batchSize := bulkInsertBatchSize
 	conds := []PostIsuConditionChannelData{}
 
 	timeoutChan := make(chan struct{}, 1)
-	scheduler.Every(2).Seconds().NotImmediately().Run(func() {
+	scheduler.Every(bulkInsertTimeout).Seconds().NotImmediately().Run(func() {
 		timeoutChan <- struct{}{}
 	})
 
@@ -1332,8 +1338,6 @@ func setInsertIsuConditionJob() {
 		select {
 		case cond := <-postIsuConditionRequestBuffer:
 
-			// TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
-			dropProbability := 0.9
 			if rand.Float64() <= dropProbability {
 			} else {
 				conds = append(conds, cond)
