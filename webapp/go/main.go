@@ -219,8 +219,9 @@ func main() {
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
 	e := echo.New()
-	e.Debug = true
-	e.Logger.SetLevel(log.DEBUG)
+	//e.Debug = true
+	//e.Logger.SetLevel(log.DEBUG)
+	e.Logger.SetLevel(log.WARN)
 
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
@@ -245,7 +246,7 @@ func main() {
 	e.GET("/isu/:jia_isu_uuid/condition", getIndex)
 	e.GET("/isu/:jia_isu_uuid/graph", getIndex)
 	e.GET("/register", getIndex)
-	e.Static("/assets", frontendContentsPath+"/assets")
+	//e.Static("/assets", frontendContentsPath+"/assets")
 
 	mySQLConnectionData = NewMySQLConnectionEnv()
 
