@@ -713,6 +713,9 @@ func postIsu(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
+	key := jiaUserID + "." + jiaIsuUUID
+	isuIconCache.Store(key, image)
+
 	return c.JSON(http.StatusCreated, isu)
 }
 
