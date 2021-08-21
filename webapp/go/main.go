@@ -1080,18 +1080,16 @@ func calculateConditionLevel(condition string) (string, error) {
 func getTrend(c echo.Context) error {
 
 	stmt :=
-		"SELECT i.id, i.character, c.`condition`, c.timestamp" + `
-			FROM isu AS i
-			LEFT JOIN isu_condition AS c
-			ON c.id = (
-				SELECT c2.id
-				FROM isu_condition AS c2
-				WHERE c2.jia_isu_uuid = i.jia_isu_uuid
-				ORDER BY c2.timestamp DESC
-				LIMIT 1
-			)
-			ORDER BY c.timestamp DESC
-		`
+		"SELECT i.id, i.character, c2.`condition`, c2.timestamp" +
+			"FROM isu AS i" +
+			"LEFT JOIN (" +
+			"		SELECT c.jia_isu_uuid, `condition`, c.timestamp" +
+			"		FROM isu_condition AS c" +
+			"		INNER JOIN (" +
+			"				SELECT jia_isu_uuid, MAX(timestamp) AS latestTimestamp FROM isu_condition GROUP BY jia_isu_uuid" +
+			"		) AS t on c.jia_isu_uuid = t.jia_isu_uuid and c.timestamp = t.latestTimestamp" +
+			") AS c2 on i.jia_isu_uuid = c2.jia_isu_uuid" +
+			"ORDER BY c2.timestamp DESC"
 
 	type TmpCondition struct {
 		IsuID     int        `db:"id"`
