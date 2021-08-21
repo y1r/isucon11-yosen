@@ -53,6 +53,7 @@ var (
 	postIsuConditionTargetBaseURL string // JIAへのactivate時に登録する，ISUがconditionを送る先のURL
 	existUsers                    map[string]struct{}
 	existUsersMutex               sync.RWMutex
+	isuIconCache                  sync.Map
 )
 
 type Config struct {
@@ -217,6 +218,7 @@ func init() {
 func initCaches() {
 	existUsers = map[string]struct{}{}
 	postIsuConditionRequestBuffer = make(chan PostIsuConditionChannelData, 100000)
+	isuIconCache = sync.Map{}
 }
 
 func main() {
@@ -759,16 +761,25 @@ func getIsuIcon(c echo.Context) error {
 
 	jiaIsuUUID := c.Param("jia_isu_uuid")
 
-	var image []byte
-	err = db.Get(&image, "SELECT `image` FROM `isu` WHERE `jia_user_id` = ? AND `jia_isu_uuid` = ?",
-		jiaUserID, jiaIsuUUID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.String(http.StatusNotFound, "not found: isu")
-		}
+	key := jiaUserID + "." + jiaIsuUUID
 
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	tmp, ok := isuIconCache.Load(key)
+
+	var image []byte
+	if ok {
+		image = tmp.([]byte)
+	} else {
+		err = db.Get(&image, "SELECT `image` FROM `isu` WHERE `jia_user_id` = ? AND `jia_isu_uuid` = ?",
+			jiaUserID, jiaIsuUUID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return c.String(http.StatusNotFound, "not found: isu")
+			}
+
+			c.Logger().Errorf("db error: %v", err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		isuIconCache.Store(key, image)
 	}
 
 	return c.Blob(http.StatusOK, "", image)
