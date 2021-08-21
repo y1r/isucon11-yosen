@@ -1072,7 +1072,7 @@ func getIsuConditionsFromDB(db *sqlx.DB, jiaIsuUUID string, endTime time.Time, c
 		case conditionLevelInfo:
 			part += " OR `condition` = 'is_dirty=false,is_overweight=false,is_broken=false'"
 		case conditionLevelWarning:
-			part += " OR (condition` != 'is_dirty=false,is_overweight=false,is_broken=false' AND `condition` != 'is_dirty=true,is_overweight=true,is_broken=true')"
+			part += " OR (`condition` != 'is_dirty=false,is_overweight=false,is_broken=false' AND `condition` != 'is_dirty=true,is_overweight=true,is_broken=true')"
 		case conditionLevelCritical:
 			part += " OR `condition` = 'is_dirty=true,is_overweight=true,is_broken=true'"
 		}
