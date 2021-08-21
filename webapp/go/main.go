@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/carlescere/scheduler"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -50,8 +51,11 @@ var (
 	jiaJWTSigningKey *ecdsa.PublicKey
 
 	postIsuConditionTargetBaseURL string // JIAへのactivate時に登録する，ISUがconditionを送る先のURL
-	existUsers                    map[string]struct{}
-	existUsersMutex               sync.RWMutex
+
+	existUsers      map[string]struct{}
+	existUsersMutex sync.RWMutex
+
+	trendCache sync.Map
 )
 
 type Config struct {
@@ -210,6 +214,7 @@ func init() {
 
 func initCaches() {
 	existUsers = map[string]struct{}{}
+	trendCache = sync.Map{}
 }
 
 func main() {
@@ -267,6 +272,8 @@ func main() {
 
 	serverPort := fmt.Sprintf(":%v", getEnv("SERVER_APP_PORT", "3000"))
 	e.Logger.Fatal(e.Start(serverPort))
+
+	scheduler.Every(1).Seconds().Run(execTrendJob)
 }
 
 func getSession(r *http.Request) (*sessions.Session, error) {
@@ -1121,6 +1128,17 @@ func calculateConditionLevel(condition string) (string, error) {
 // GET /api/trend
 // ISUの性格毎の最新のコンディション情報
 func getTrend(c echo.Context) error {
+	res, ok := trendCache.Load("trend")
+
+	if ok {
+		return c.JSON(http.StatusOK, res)
+	} else {
+		c.Logger().Errorf("cache not found")
+		return c.NoContent(http.StatusInternalServerError)
+	}
+}
+
+func execTrendJob() {
 
 	stmt :=
 		"SELECT i.id, i.character, c2.`condition`, c2.timestamp " +
@@ -1143,8 +1161,9 @@ func getTrend(c echo.Context) error {
 	tmpConditions := []TmpCondition{}
 	err := db.Select(&tmpConditions, stmt)
 	if err != nil {
-		c.Logger().Errorf("db error: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+		// c.Logger().Errorf("db error: %v", err)
+		// return c.NoContent(http.StatusInternalServerError)
+		return
 	}
 
 	characterToConditions := map[string]([]TmpCondition){}
@@ -1170,8 +1189,9 @@ func getTrend(c echo.Context) error {
 			if x.Condition != nil {
 				conditionLevel, err := calculateConditionLevel(*x.Condition)
 				if err != nil {
-					c.Logger().Error(err)
-					return c.NoContent(http.StatusInternalServerError)
+					// c.Logger().Error(err)
+					// return c.NoContent(http.StatusInternalServerError)
+					return
 				}
 				trendCondition := TrendCondition{
 					ID:        x.IsuID,
@@ -1199,7 +1219,7 @@ func getTrend(c echo.Context) error {
 
 	}
 
-	return c.JSON(http.StatusOK, res)
+	trendCache.Store("trend", res)
 }
 
 // POST /api/condition/:jia_isu_uuid
