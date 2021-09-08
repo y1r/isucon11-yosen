@@ -511,13 +511,17 @@ func getIsuList(c echo.Context) error {
 			c.condition AS condition_condition,
 			c.message AS condition_message
 		FROM isu AS i
-		LEFT JOIN isu_condition AS c
-		ON c.id = (
-			SELECT c2.id
-			FROM isu_condition AS c2
-			WHERE c2.jia_isu_uuid = i.jia_isu_uuid
-			ORDER BY timestamp DESC LIMIT 1
-		)
+		LEFT JOIN (
+			SELECT c1.*
+			FROM isu_condition AS c1
+			INNER JOIN (
+				SELECT c2.jia_isu_uuid, MAX(c2.timestamp) AS latest_timestamp
+				FROM isu_condition AS c2
+				GROUP BY c2.jia_isu_uuid
+			) AS c3
+			ON c1.jia_isu_uuid = c3.jia_isu_uuid AND c1.timestamp = c3.latest_timestamp
+		) AS c
+		ON c.jia_isu_uuid = i.jia_isu_uuid
 		WHERE jia_user_id = ?
 		ORDER BY i.id DESC
 	`
@@ -856,7 +860,7 @@ func generateIsuGraphResponse(tx *sqlx.Tx, jiaIsuUUID string, graphDate time.Tim
 	var startTimeInThisHour time.Time
 
 	allIsuCondition := []IsuCondition{}
-	err := tx.Select(&allIsuCondition, "SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ? AND timestamp >= ? AND timestamp <= ? ORDER BY `timestamp` ASC", jiaIsuUUID, graphDate.Add(-2*time.Hour), graphDate.Add(26*time.Hour))
+	err := tx.Select(&allIsuCondition, "SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ? AND timestamp >= ? AND timestamp <= ? ORDER BY `timestamp` ASC", jiaIsuUUID, graphDate.Add(0), graphDate.Add(24*time.Hour))
 	if err != nil {
 		return nil, fmt.Errorf("db error: %v", err)
 	}
