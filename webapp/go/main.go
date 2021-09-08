@@ -47,7 +47,7 @@ const (
 	bulkInsertTimeout           = 1   // secs
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
-	trendCacheDuration          = 1 // secs
+	trendCacheDuration          = 1 * time.Second // secs
 )
 
 var (
@@ -233,7 +233,7 @@ func initCaches() {
 func main() {
 	initCaches()
 	go setInsertIsuConditionJob()
-	scheduler.Every(trendCacheDuration).Seconds().Run(execTrendJob)
+	//scheduler.Every(trendCacheDuration).Seconds().Run(execTrendJob)
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
@@ -283,6 +283,8 @@ func main() {
 		e.Logger.Fatalf("missing: POST_ISUCONDITION_TARGET_BASE_URL")
 		return
 	}
+
+	go execTrendJob()
 
 	serverPort := fmt.Sprintf(":%v", getEnv("SERVER_APP_PORT", "3000"))
 	e.Logger.Fatal(e.Start(serverPort))
@@ -1185,6 +1187,17 @@ func getTrend(c echo.Context) error {
 }
 
 func execTrendJob() {
+	ticker := time.NewTicker(trendCacheDuration)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			execTrend()
+		}
+	}
+}
+
+func execTrend() {
 
 	stmt :=
 		"SELECT i.id, i.character, c2.`condition`, c2.timestamp " +
