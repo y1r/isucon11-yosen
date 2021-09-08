@@ -178,7 +178,7 @@ type PostIsuConditionRequest struct {
 
 type PostIsuConditionChannelData struct {
 	JiaIsuUUID string
-	request    PostIsuConditionRequest
+	requests   []PostIsuConditionRequest
 }
 
 type JIAServiceRequest struct {
@@ -1298,11 +1298,9 @@ func postIsuCondition(c echo.Context) error {
 		return c.String(http.StatusNotFound, "not found: isu")
 	}
 
-	for _, cond := range req {
-		postIsuConditionRequestBuffer <- PostIsuConditionChannelData{
-			JiaIsuUUID: jiaIsuUUID,
-			request:    cond,
-		}
+	postIsuConditionRequestBuffer <- PostIsuConditionChannelData{
+		JiaIsuUUID: jiaIsuUUID,
+		requests:   req,
 	}
 
 	return c.NoContent(http.StatusAccepted)
@@ -1310,7 +1308,7 @@ func postIsuCondition(c echo.Context) error {
 
 func setInsertIsuConditionJob() {
 	batchSize := bulkInsertBatchSize
-	conds := []PostIsuConditionChannelData{}
+	datas := make([]PostIsuConditionChannelData, 0, batchSize)
 
 	timeoutTicker := time.NewTicker(bulkInsertTimeout)
 	defer timeoutTicker.Stop()
@@ -1319,18 +1317,21 @@ func setInsertIsuConditionJob() {
 		valueStrings := []string{}
 		valueArgs := [](interface{}){}
 
-		for _, cond := range conds {
-			timestamp := time.Unix(cond.request.Timestamp, 0)
+		for _, data := range datas {
+			for _, cond := range data.requests {
+				timestamp := time.Unix(cond.Timestamp, 0)
 
-			if !isValidConditionFormat(cond.request.Condition) {
-				// return c.String(http.StatusBadRequest, "bad request body")
-			} else {
-				valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
-				valueArgs = append(valueArgs, cond.JiaIsuUUID)
-				valueArgs = append(valueArgs, timestamp)
-				valueArgs = append(valueArgs, cond.request.IsSitting)
-				valueArgs = append(valueArgs, cond.request.Condition)
-				valueArgs = append(valueArgs, cond.request.Message)
+				if !isValidConditionFormat(cond.Condition) {
+					// return c.String(http.StatusBadRequest, "bad request body")
+				} else {
+					valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
+					valueArgs = append(valueArgs, data.JiaIsuUUID)
+					valueArgs = append(valueArgs, timestamp)
+					valueArgs = append(valueArgs, cond.IsSitting)
+					valueArgs = append(valueArgs, cond.Condition)
+					valueArgs = append(valueArgs, cond.Message)
+				}
+
 			}
 
 		}
@@ -1344,23 +1345,27 @@ func setInsertIsuConditionJob() {
 		}
 	}
 
+	condSize := 0
+
 	for {
 		timeout := false
 		select {
-		case cond := <-postIsuConditionRequestBuffer:
+		case data := <-postIsuConditionRequestBuffer:
 
 			if rand.Float64() <= dropProbability {
 			} else {
-				conds = append(conds, cond)
+				datas = append(datas, data)
+				condSize += len(data.requests)
 			}
 
 		case <-timeoutTicker.C:
 			timeout = true
 		}
 
-		if len(conds) > batchSize || (timeout && len(conds) > 0) {
+		if condSize > batchSize || (timeout && condSize > 0) {
 			bulkInsert()
-			conds = []PostIsuConditionChannelData{}
+			datas = datas[:0]
+			condSize = 0
 		}
 	}
 }
