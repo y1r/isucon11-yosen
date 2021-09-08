@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/carlescere/scheduler"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
