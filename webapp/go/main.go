@@ -44,7 +44,7 @@ const (
 
 	//
 	dropProbability             = 0 // TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
-	bulkInsertTimeout           = 1   // secs
+	bulkInsertTimeout           = 1 * time.Second
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
 	trendCacheDuration          = 250 * time.Millisecond
@@ -233,7 +233,6 @@ func initCaches() {
 func main() {
 	initCaches()
 	go setInsertIsuConditionJob()
-	//scheduler.Every(trendCacheDuration).Seconds().Run(execTrendJob)
 
 	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 1000
 
@@ -1321,10 +1320,8 @@ func setInsertIsuConditionJob() {
 	batchSize := bulkInsertBatchSize
 	conds := []PostIsuConditionChannelData{}
 
-	timeoutChan := make(chan struct{}, 1)
-	scheduler.Every(bulkInsertTimeout).Seconds().NotImmediately().Run(func() {
-		timeoutChan <- struct{}{}
-	})
+	timeoutTicker := time.NewTicker(bulkInsertTimeout)
+	defer timeoutTicker.Stop()
 
 	bulkInsert := func() {
 		valueStrings := []string{}
@@ -1365,7 +1362,7 @@ func setInsertIsuConditionJob() {
 				conds = append(conds, cond)
 			}
 
-		case <-timeoutChan:
+		case <-timeoutTicker.C:
 			timeout = true
 		}
 
