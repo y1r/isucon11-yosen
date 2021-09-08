@@ -43,7 +43,7 @@ const (
 
 	//
 	dropProbability             = 0 // TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
-	bulkInsertTimeout           = 1 * time.Second
+	bulkInsertTimeout           = 250 * time.Millisecond
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
 	trendCacheDuration          = 250 * time.Millisecond
