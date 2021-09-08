@@ -47,7 +47,7 @@ const (
 	bulkInsertTimeout           = 1   // secs
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
-	trendCacheDuration          = 1 * time.Second // secs
+	trendCacheDuration          = 100 * time.Millisecond
 )
 
 var (
@@ -1190,10 +1190,8 @@ func execTrendJob() {
 	ticker := time.NewTicker(trendCacheDuration)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-ticker.C:
-			execTrend()
-		}
+		execTrend()
+		<-ticker.C
 	}
 }
 
