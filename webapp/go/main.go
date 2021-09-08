@@ -1366,35 +1366,14 @@ func setInsertIsuConditionJob() {
 
 // ISUのコンディションの文字列がcsv形式になっているか検証
 func isValidConditionFormat(conditionStr string) bool {
-	keys := []string{"is_dirty=", "is_overweight=", "is_broken="}
-	const valueTrue = "true"
-	const valueFalse = "false"
-
-	idxCondStr := 0
-
-	for idxKeys, key := range keys {
-		if !strings.HasPrefix(conditionStr[idxCondStr:], key) {
-			return false
-		}
-		idxCondStr += len(key)
-
-		if strings.HasPrefix(conditionStr[idxCondStr:], valueTrue) {
-			idxCondStr += len(valueTrue)
-		} else if strings.HasPrefix(conditionStr[idxCondStr:], valueFalse) {
-			idxCondStr += len(valueFalse)
-		} else {
-			return false
-		}
-
-		if idxKeys < (len(keys) - 1) {
-			if conditionStr[idxCondStr] != ',' {
-				return false
-			}
-			idxCondStr++
-		}
-	}
-
-	return (idxCondStr == len(conditionStr))
+	return conditionStr == "is_dirty=false,is_overweight=false,is_broken=false" ||
+		conditionStr == "is_dirty=true,is_overweight=false,is_broken=false" ||
+		conditionStr == "is_dirty=false,is_overweight=true,is_broken=false" ||
+		conditionStr == "is_dirty=true,is_overweight=true,is_broken=false" ||
+		conditionStr == "is_dirty=false,is_overweight=false,is_broken=true" ||
+		conditionStr == "is_dirty=true,is_overweight=false,is_broken=true" ||
+		conditionStr == "is_dirty=false,is_overweight=true,is_broken=true" ||
+		conditionStr == "is_dirty=true,is_overweight=true,is_broken=true"
 }
 
 func getIndex(c echo.Context) error {
