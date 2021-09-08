@@ -43,11 +43,11 @@ const (
 	scoreConditionLevelCritical = 1
 
 	//
-	dropProbability             = 0.4 // TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
+	dropProbability             = 0 // TODO: 一定割合リクエストを落としてしのぐようにしたが、本来は全量さばけるようにすべき
 	bulkInsertTimeout           = 1   // secs
 	bulkInsertBatchSize         = 1024 * 5
 	bulkInsertChannelBufferSize = 100000
-	trendCacheDuration          = 100 * time.Millisecond
+	trendCacheDuration          = 250 * time.Millisecond
 )
 
 var (
