@@ -23,6 +23,16 @@ CREATE TABLE `isu_condition` (
   `condition` VARCHAR(255) NOT NULL,
   `message` VARCHAR(255) NOT NULL,
   `created_at` DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  is_dirty TINYINT(1) AS (`condition` LIKE '%is_dirty=true%') STORED,
+  is_overweight TINYINT(1) AS (`condition` LIKE '%is_overweight=true%') STORED,
+  is_broken TINYINT(1) AS (`condition` LIKE '%is_broken=true%') STORED,
+  bad_count INT AS (is_dirty + is_overweight + is_broken) STORED,
+  bad_name VARCHAR(10) AS (
+    CASE WHEN bad_count = 0 THEN 'info'
+         WHEN bad_count = 3 THEN 'critical'
+                            ELSE 'warning'
+    END
+  ) STORED,
   PRIMARY KEY (jia_isu_uuid, `timestamp`),
   INDEX idx_uuid_createdat(jia_isu_uuid, created_at)
 ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4;

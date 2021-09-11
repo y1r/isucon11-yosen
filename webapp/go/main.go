@@ -509,7 +509,8 @@ func getIsuList(c echo.Context) error {
 			c.timestamp AS condition_timestamp,
 			c.is_sitting AS condition_is_sitting,
 			c.condition AS condition_condition,
-			c.message AS condition_message
+			c.message AS condition_message,
+			c.bad_name AS condition_bad_name
 		FROM isu AS i
 		LEFT JOIN (
 			SELECT c1.*
@@ -538,6 +539,7 @@ func getIsuList(c echo.Context) error {
 		ConditionIsSitting  *bool      `db:"condition_is_sitting"`
 		ConditionCondition  *string    `db:"condition_condition"`
 		ConditionMessage    *string    `db:"condition_message"`
+		ConditionBadName    *string    `db:"condition_bad_name"`
 	}
 
 	isuAndConditionList := []IsuAndCondition{}
@@ -557,11 +559,7 @@ func getIsuList(c echo.Context) error {
 	for _, isuAndCondition := range isuAndConditionList {
 		var formattedCondition *GetIsuConditionResponse
 		if isuAndCondition.ConditionID != nil {
-			conditionLevel, err := calculateConditionLevel(*isuAndCondition.ConditionCondition)
-			if err != nil {
-				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
-			}
+			conditionLevel := *isuAndCondition.ConditionBadName
 
 			formattedCondition = &GetIsuConditionResponse{
 				JIAIsuUUID:     *isuAndCondition.ConditionJIAIsuUUID,
@@ -852,15 +850,24 @@ func getIsuGraph(c echo.Context) error {
 	return c.JSON(http.StatusOK, res)
 }
 
+type IsuCondition2 struct {
+	IsuCondition
+	IsDirty      bool `db:"is_dirty"`
+	IsOverweight bool `db:"is_overweight"`
+	IsBroken     bool `db:"is_broken"`
+	BadCount     int  `db:"bad_count"`
+}
+
 // グラフのデータ点を一日分生成
 func generateIsuGraphResponse(tx *sqlx.Tx, jiaIsuUUID string, graphDate time.Time) ([]GraphResponse, error) {
 	dataPoints := []GraphDataPointWithInfo{}
-	conditionsInThisHour := []IsuCondition{}
+	conditionsInThisHour := []IsuCondition2{}
 	timestampsInThisHour := []int64{}
 	var startTimeInThisHour time.Time
 
-	allIsuCondition := []IsuCondition{}
-	err := tx.Select(&allIsuCondition, "SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ? AND timestamp >= ? AND timestamp <= ? ORDER BY `timestamp` ASC", jiaIsuUUID, graphDate.Add(0), graphDate.Add(24*time.Hour))
+	allIsuCondition := []IsuCondition2{}
+
+	err := tx.Select(&allIsuCondition, "SELECT id, jia_isu_uuid, timestamp, is_sitting, `condition`, message, created_at, is_dirty, is_overweight, is_broken, bad_count FROM `isu_condition` WHERE `jia_isu_uuid` = ? AND timestamp >= ? AND timestamp <= ? ORDER BY `timestamp` ASC", jiaIsuUUID, graphDate.Add(0), graphDate.Add(24*time.Hour))
 	if err != nil {
 		return nil, fmt.Errorf("db error: %v", err)
 	}
@@ -869,7 +876,7 @@ func generateIsuGraphResponse(tx *sqlx.Tx, jiaIsuUUID string, graphDate time.Tim
 		truncatedConditionTime := condition.Timestamp.Truncate(time.Hour)
 		if truncatedConditionTime != startTimeInThisHour {
 			if len(conditionsInThisHour) > 0 {
-				data, err := calculateGraphDataPoint(conditionsInThisHour)
+				data, err := calculateGraphDataPoint2(conditionsInThisHour)
 				if err != nil {
 					return nil, err
 				}
@@ -883,7 +890,7 @@ func generateIsuGraphResponse(tx *sqlx.Tx, jiaIsuUUID string, graphDate time.Tim
 			}
 
 			startTimeInThisHour = truncatedConditionTime
-			conditionsInThisHour = []IsuCondition{}
+			conditionsInThisHour = []IsuCondition2{}
 			timestampsInThisHour = []int64{}
 		}
 		conditionsInThisHour = append(conditionsInThisHour, condition)
@@ -891,7 +898,7 @@ func generateIsuGraphResponse(tx *sqlx.Tx, jiaIsuUUID string, graphDate time.Tim
 	}
 
 	if len(conditionsInThisHour) > 0 {
-		data, err := calculateGraphDataPoint(conditionsInThisHour)
+		data, err := calculateGraphDataPoint2(conditionsInThisHour)
 		if err != nil {
 			return nil, err
 		}
@@ -954,37 +961,33 @@ func generateIsuGraphResponse(tx *sqlx.Tx, jiaIsuUUID string, graphDate time.Tim
 }
 
 // 複数のISUのコンディションからグラフの一つのデータ点を計算
-func calculateGraphDataPoint(isuConditions []IsuCondition) (GraphDataPoint, error) {
-	conditionsCount := map[string]int{"is_broken": 0, "is_dirty": 0, "is_overweight": 0}
+func calculateGraphDataPoint2(isuConditions []IsuCondition2) (GraphDataPoint, error) {
+	isDirtyCount := 0
+	isOverweightCount := 0
+	isBrokenCount := 0
+
 	rawScore := 0
+	sittingCount := 0
 	for _, condition := range isuConditions {
-		badConditionsCount := 0
 
-		if !isValidConditionFormat(condition.Condition) {
-			return GraphDataPoint{}, fmt.Errorf("invalid condition format")
+		if condition.IsDirty {
+			isDirtyCount++
+		}
+		if condition.IsOverweight {
+			isOverweightCount++
+		}
+		if condition.IsBroken {
+			isBrokenCount++
 		}
 
-		for _, condStr := range strings.Split(condition.Condition, ",") {
-			keyValue := strings.Split(condStr, "=")
-
-			conditionName := keyValue[0]
-			if keyValue[1] == "true" {
-				conditionsCount[conditionName] += 1
-				badConditionsCount++
-			}
-		}
-
-		if badConditionsCount >= 3 {
+		if condition.BadCount >= 3 {
 			rawScore += scoreConditionLevelCritical
-		} else if badConditionsCount >= 1 {
+		} else if condition.BadCount >= 1 {
 			rawScore += scoreConditionLevelWarning
 		} else {
 			rawScore += scoreConditionLevelInfo
 		}
-	}
 
-	sittingCount := 0
-	for _, condition := range isuConditions {
 		if condition.IsSitting {
 			sittingCount++
 		}
@@ -995,9 +998,9 @@ func calculateGraphDataPoint(isuConditions []IsuCondition) (GraphDataPoint, erro
 	score := rawScore * 100 / 3 / isuConditionsLength
 
 	sittingPercentage := sittingCount * 100 / isuConditionsLength
-	isBrokenPercentage := conditionsCount["is_broken"] * 100 / isuConditionsLength
-	isOverweightPercentage := conditionsCount["is_overweight"] * 100 / isuConditionsLength
-	isDirtyPercentage := conditionsCount["is_dirty"] * 100 / isuConditionsLength
+	isBrokenPercentage := isBrokenCount * 100 / isuConditionsLength
+	isOverweightPercentage := isOverweightCount * 100 / isuConditionsLength
+	isDirtyPercentage := isDirtyCount * 100 / isuConditionsLength
 
 	dataPoint := GraphDataPoint{
 		Score: score,
@@ -1079,32 +1082,28 @@ func getIsuConditions(c echo.Context) error {
 func getIsuConditionsFromDB(db *sqlx.DB, jiaIsuUUID string, endTime time.Time, conditionLevel map[string]interface{}, startTime time.Time,
 	limit int, isuName string) ([]*GetIsuConditionResponse, error) {
 
-	conditions := []IsuCondition{}
+	conditions := []struct {
+		IsuCondition
+		BadName string `db:"bad_name"`
+	}{}
 	var err error
 
 	part := "(FALSE "
 	for s := range conditionLevel {
-		switch s {
-		case conditionLevelInfo:
-			part += " OR `condition` = 'is_dirty=false,is_overweight=false,is_broken=false'"
-		case conditionLevelWarning:
-			part += " OR (`condition` != 'is_dirty=false,is_overweight=false,is_broken=false' AND `condition` != 'is_dirty=true,is_overweight=true,is_broken=true')"
-		case conditionLevelCritical:
-			part += " OR `condition` = 'is_dirty=true,is_overweight=true,is_broken=true'"
-		}
+		part += " OR bad_name = '" + s + "'"
 	}
 	part += ")"
 
 	if startTime.IsZero() {
 		err = db.Select(&conditions,
-			"SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ?"+
+			"SELECT id, jia_isu_uuid, timestamp, is_sitting, `condition`, message, created_at, bad_name FROM `isu_condition` WHERE `jia_isu_uuid` = ?"+
 				"	AND `timestamp` < ? AND "+part+
 				"	ORDER BY `timestamp` DESC LIMIT ?",
 			jiaIsuUUID, endTime, limit,
 		)
 	} else {
 		err = db.Select(&conditions,
-			"SELECT * FROM `isu_condition` WHERE `jia_isu_uuid` = ?"+
+			"SELECT id, jia_isu_uuid, timestamp, is_sitting, `condition`, message, created_at, bad_name FROM `isu_condition` WHERE `jia_isu_uuid` = ?"+
 				"	AND `timestamp` < ?"+
 				"	AND ? <= `timestamp` AND "+part+
 				"	ORDER BY `timestamp` DESC LIMIT ?",
@@ -1117,10 +1116,7 @@ func getIsuConditionsFromDB(db *sqlx.DB, jiaIsuUUID string, endTime time.Time, c
 
 	conditionsResponse := []*GetIsuConditionResponse{}
 	for _, c := range conditions {
-		cLevel, err := calculateConditionLevel(c.Condition)
-		if err != nil {
-			continue
-		}
+		cLevel := c.BadName
 
 		if _, ok := conditionLevel[cLevel]; ok {
 			data := GetIsuConditionResponse{
@@ -1141,25 +1137,6 @@ func getIsuConditionsFromDB(db *sqlx.DB, jiaIsuUUID string, endTime time.Time, c
 	// }
 
 	return conditionsResponse, nil
-}
-
-// ISUのコンディションの文字列からコンディションレベルを計算
-func calculateConditionLevel(condition string) (string, error) {
-	var conditionLevel string
-
-	warnCount := strings.Count(condition, "=true")
-	switch warnCount {
-	case 0:
-		conditionLevel = conditionLevelInfo
-	case 1, 2:
-		conditionLevel = conditionLevelWarning
-	case 3:
-		conditionLevel = conditionLevelCritical
-	default:
-		return "", fmt.Errorf("unexpected warn count")
-	}
-
-	return conditionLevel, nil
 }
 
 // GET /api/trend
@@ -1187,10 +1164,10 @@ func execTrendJob() {
 func execTrend() {
 
 	stmt :=
-		"SELECT i.id, i.character, c2.`condition`, c2.timestamp " +
+		"SELECT i.id, i.character, c2.bad_name, c2.timestamp " +
 			"FROM isu AS i " +
 			"LEFT JOIN ( " +
-			"		SELECT c.jia_isu_uuid, `condition`, c.timestamp " +
+			"		SELECT c.jia_isu_uuid, bad_name, c.timestamp " +
 			"		FROM isu_condition AS c " +
 			"		INNER JOIN ( " +
 			"				SELECT jia_isu_uuid, MAX(timestamp) AS latestTimestamp FROM isu_condition GROUP BY jia_isu_uuid " +
@@ -1199,10 +1176,10 @@ func execTrend() {
 			"ORDER BY c2.timestamp DESC"
 
 	type TmpCondition struct {
-		IsuID     int        `db:"id"`
-		Character string     `db:"character"`
-		Condition *string    `db:"condition"`
-		Timestamp *time.Time `db:"timestamp"`
+		IsuID            int        `db:"id"`
+		Character        string     `db:"character"`
+		ConditionBadName *string    `db:"bad_name"`
+		Timestamp        *time.Time `db:"timestamp"`
 	}
 	tmpConditions := []TmpCondition{}
 	err := db.Select(&tmpConditions, stmt)
@@ -1232,13 +1209,8 @@ func execTrend() {
 		characterCriticalIsuConditions := []*TrendCondition{}
 
 		for _, x := range xs {
-			if x.Condition != nil {
-				conditionLevel, err := calculateConditionLevel(*x.Condition)
-				if err != nil {
-					// c.Logger().Error(err)
-					// return c.NoContent(http.StatusInternalServerError)
-					return
-				}
+			if x.ConditionBadName != nil {
+				conditionLevel := *x.ConditionBadName
 				trendCondition := TrendCondition{
 					ID:        x.IsuID,
 					Timestamp: x.Timestamp.Unix(),
